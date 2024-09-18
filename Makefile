@@ -1,3 +1,62 @@
+## Help
+
+.DEFAULT_GOAL := all
+
+help helpall::
+	$(info )
+	$(info Getting Help)
+	$(info ============)
+	$(info make help                 Show brief help)
+	$(info make helpall              Show extended help)
+	$(info )
+	$(info Building)
+	$(info ========)
+	$(info )
+	$(info Use "MELPA_CHANNEL=<channel> make <target>")
+	$(info .    to build like MELPA channel <channel> does.)
+	$(info .    <channel> is one of "stable" or "unstable".)
+	$(info or use "make <target>")
+	$(info .    to build using package-build.el’s default)
+	$(info .    settings (which is like channel "unstable").)
+	$(info )
+helpall::
+	$(info Use "PACKAGE_BUILD_REPO=<dir> make <target>")
+	$(info .    to use an out-of-tree package-build.el.)
+	$(info )
+help helpall::
+	$(info make recipes/<package>    Build <package>)
+	$(info make [-k] [-j 8] build    Build all packages)
+	$(info make all                  Build everything)
+helpall::
+	$(info make -k -j 8 build; make summarise)
+	$(info .                         Build everything faster)
+	$(info make summarise            Build all package and indices)
+	$(info make archive-contents     Build main package index)
+	$(info make json                 Build json package index)
+	$(info make html                 Build html package index)
+help helpall::
+	$(info )
+	$(info Cleaning)
+	$(info ========)
+	$(info make clean                Empty output directories of all channels)
+	$(info .                         Also clean indices but not cloned repos)
+	$(info make clean-packages       Empty current channel’s output directory)
+helpall::
+	$(info make clean-json           Clean current channel’s json index)
+	$(info make clean-sandbox        Clean sandbox)
+	$(info make clean-working        [DANGER] Remove all cloned repositories)
+help helpall::
+	$(info )
+helpall::
+	$(info Maintenance)
+	$(info ===========)
+	$(info make pull-package-build   Merge new package-build.el version)
+	$(info make docker-build-run     Build everything like melpa.org does)
+	$(info make docker-build-shell   Run interactive shell in the container)
+	$(info make docker-build-rebuild Re-build the build container)
+help helpall::
+	@printf "\n"
+
 ## Settings
 
 TOP := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
@@ -53,6 +112,37 @@ CHANNEL_CONFIG := "(progn\
         '(package-build-tag-version))\
   (setq package-build-badge-data '(\"melpa stable\" \"\#3e999f\")))"
 
+else ifeq ($(MELPA_CHANNEL), snapshot)
+# This is an experimental channel, which may
+# eventually replace the "unstable" channel.
+PKGDIR  := packages-snapshot
+HTMLDIR := html-snapshot
+CHANNEL_CONFIG := "(progn\
+  (setq package-build-stable nil)\
+  (setq package-build-all-publishable t)\
+  (setq package-build-snapshot-version-functions\
+        '(package-build-release+count-version))\
+  (setq package-build-release-version-functions\
+        '(package-build-tag-version\
+          package-build-header-version))\
+  (setq package-build-badge-data '(\"snapshot\" \"\#30a14e\")))"
+
+else ifeq ($(MELPA_CHANNEL), release)
+# This is an experimental channel, which may
+# eventually replace the "stable" channel.
+PKGDIR  := packages-release
+HTMLDIR := html-release
+CHANNEL_CONFIG := "(progn\
+  (setq package-build-stable t)\
+  (setq package-build-all-publishable t)\
+  (setq package-build-snapshot-version-functions\
+        '(package-build-release+count-version))\
+  (setq package-build-release-version-functions\
+        '(package-build-tag-version\
+          package-build-header-version\
+          package-build-fallback-count-version))\
+  (setq package-build-badge-data '(\"release\" \"\#9be9a8\")))"
+
 else
 $(error Unknown MELPA_CHANNEL: $(MELPA_CHANNEL))
 endif
@@ -64,7 +154,13 @@ LOCATION_CONFIG ?= "(progn\
   (setq package-build-archive-dir \"$(TOP)/$(PKGDIR)/\")\
   (setq package-build-recipes-dir \"$(TOP)/$(RCPDIR)/\"))"
 
-LOAD_PATH ?= $(TOP)/package-build
+ifeq ($(INSIDE_DOCKER), true)
+LOAD_PATH := $(TOP)/package-build
+else ifdef PACKAGE_BUILD_REPO
+LOAD_PATH := $(PACKAGE_BUILD_REPO)
+else
+LOAD_PATH := $(TOP)/package-build
+endif
 
 EVAL := $(EMACS) --no-site-file --batch \
 $(addprefix -L ,$(LOAD_PATH)) \
@@ -138,6 +234,8 @@ clean-sandbox:
 clean: .FORCE
 	MELPA_CHANNEL=unstable make clean-packages clean-json clean-sandbox
 	MELPA_CHANNEL=stable   make clean-packages clean-json clean-sandbox
+	MELPA_CHANNEL=snapshot make clean-packages clean-json clean-sandbox
+	MELPA_CHANNEL=release  make clean-packages clean-json clean-sandbox
 
 ## Update package-build
 
@@ -149,7 +247,27 @@ pull-package-build:
 	-m "Merge Package-Build $$(git describe FETCH_HEAD)" \
 	--squash -P package-build FETCH_HEAD
 
-## Docker support
+## Docker
+
+docker-build-run:
+	docker run -it \
+	--mount type=bind,src=$$PWD,target=/mnt/store/melpa \
+	--mount type=bind,src=$(LOAD_PATH),target=/mnt/store/package-build \
+	-e INHIBIT_MELPA_PULL=t \
+	melpa_builder
+
+docker-build-shell:
+	docker run -it \
+	--mount type=bind,src=$$PWD,target=/mnt/store/melpa \
+	--mount type=bind,src=$(LOAD_PATH),target=/mnt/store/package-build \
+	-e INHIBIT_MELPA_PULL=t \
+	melpa_builder bash
+
+docker-build-rebuild:
+	docker build \
+	--build-arg UID=$$(id --user) \
+	--build-arg GID=$$(id --group) \
+	-t melpa_builder docker/builder-ng
 
 get-pkgdir: .FORCE
 	@echo $(PKGDIR)

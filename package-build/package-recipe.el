@@ -1,8 +1,9 @@
 ;;; package-recipe.el --- Package recipes as EIEIO objects  -*- lexical-binding:t; coding:utf-8 -*-
 
-;; Copyright (C) 2018-2023 Jonas Bernoulli
+;; Copyright (C) 2018-2024 Jonas Bernoulli
 
-;; Author: Jonas Bernoulli <jonas@bernoul.li>
+;; Author: Jonas Bernoulli <emacs.package-build@jonas.bernoulli.dev>
+;; Maintainer: Jonas Bernoulli <emacs.package-build@jonas.bernoulli.dev>
 ;; Homepage: https://github.com/melpa/package-build
 ;; Keywords: maint tools
 
@@ -27,6 +28,7 @@
 
 ;;; Code:
 
+(require 'compat nil t)
 (require 'eieio)
 (require 'subr-x)
 (require 'url-parse)
@@ -51,6 +53,9 @@
    (time                                     :initform nil)
    (version                                  :initform nil)
    (version-regexp  :initarg :version-regexp :initform nil)
+   (shell-command   :initarg :shell-command  :initform nil)
+   (make-targets    :initarg :make-targets   :initform nil)
+   (org-exports     :initarg :org-exports    :initform nil)
    (old-names       :initarg :old-names      :initform nil))
   :abstract t)
 
@@ -168,8 +173,9 @@ file is invalid, then raise an error."
                name ident)
     (cl-assert plist)
     (let* ((symbol-keys '(:fetcher))
-           (string-keys '(:url :repo :commit :branch :version-regexp))
-           (list-keys '(:files :old-names))
+           (string-keys '( :url :repo :commit :branch
+                           :version-regexp :shell-command))
+           (list-keys '(:files :make-targets :org-exports :old-names))
            (all-keys (append symbol-keys string-keys list-keys)))
       (dolist (thing plist)
         (when (keywordp thing)
@@ -182,30 +188,29 @@ file is invalid, then raise an error."
               (cl-assert (not (plist-get plist :url)) ":url is redundant"))
           (cl-assert (plist-get plist :url) ":url is missing")))
       (dolist (key symbol-keys)
-        (let ((val (plist-get plist key)))
-          (when val
-            (cl-assert (symbolp val) nil "%s must be a symbol but is %S" key val))))
+        (when-let ((val (plist-get plist key)))
+          (cl-assert (symbolp val) nil "%s must be a symbol but is %S" key val)))
       (dolist (key list-keys)
-        (let ((val (plist-get plist key)))
-          (when val
-            (cl-assert (listp val) nil "%s must be a list but is %S" key val))))
+        (when-let ((val (plist-get plist key)))
+          (cl-assert (listp val) nil "%s must be a list but is %S" key val)))
       (dolist (key string-keys)
-        (let ((val (plist-get plist key)))
-          (when val
-            (cl-assert (stringp val) nil "%s must be a string but is %S" key val))))
+        (when-let ((val (plist-get plist key)))
+          (cl-assert (stringp val) nil "%s must be a string but is %S" key val)))
       (when-let ((spec (plist-get plist :files)))
         ;; `:defaults' is only allowed as the first element.
         ;; If we find it in that position, skip over it.
         (when (eq (car spec) :defaults)
           (setq spec (cdr spec)))
         ;; All other elements have to be strings or lists of strings.
-        ;; A list whose first element is `:exclude' is also valid.
+        ;; Lists whose first element is `:exclude', `:inputs' or
+        ;; `:rename' are also valid.
         (dolist (entry spec)
           (unless (cond ((stringp entry)
                          (not (equal entry "*")))
                         ((listp entry)
                          (and-let* ((globs (cdr entry)))
-                           (and (or (eq (car entry) :exclude)
+                           (and (or (memq (car entry)
+                                          '(:exclude :inputs :rename))
                                     (stringp (car entry)))
                                 (seq-every-p (lambda (glob)
                                                (and (stringp glob)
